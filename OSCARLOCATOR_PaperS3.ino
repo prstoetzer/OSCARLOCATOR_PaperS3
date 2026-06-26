@@ -55,6 +55,7 @@
 #include <ArduinoJson.h>
 #include <Sgp4.h>
 #include "coastline.h"
+#include "oscar_types.h"
 
 // ---------------------------------------------------------------------------
 //  Constants & globals
@@ -127,6 +128,8 @@ const char* viewName(ViewMode v) {
 // Screen state machine
 enum Screen { SCR_MAP = 0, SCR_PASSES, SCR_REFORBITS };
 Screen screen = SCR_MAP;
+
+// (Proj, Btn, ResolvedMode are defined in oscar_types.h, included up top.)
 
 // Pass list
 struct PassRec { double aos, peak, los; double maxEl; };
@@ -236,15 +239,7 @@ static double bearingDeg(double lat1, double lon1, double lat2, double lon2) {
 //  Map edge in great-circle degrees (rmax): polar maps span pole->equator (90),
 //  the QTH map is clamped to |qlat|+25 in [50,80] like OrbitDeck.
 // ---------------------------------------------------------------------------
-enum ResolvedMode { RM_POLAR_NORTH = 0, RM_POLAR_SOUTH, RM_QTH };
-
-struct Proj {
-  ResolvedMode rm;
-  int    cx, cy, R;    // canvas geometry
-  double rmaxDeg;
-};
-
-Proj gProj;
+Proj gProj;   // type declared near the top of the file
 
 ResolvedMode resolveMode() {
   if (viewMode == V_QTH)          return RM_QTH;
@@ -256,8 +251,10 @@ ResolvedMode resolveMode() {
 }
 
 void setupProjection(Proj& P) {
-  // Clear area is y in [58, 476] (header 56, tab bar starts at 478).
-  P.cx = 268; P.cy = 268; P.R = 205;   // map disc on the left, clear of bars
+  // Clear band is y in [58, 476] (header ends 56, tab bar line at 478).
+  // Rim labels sit ~22 px outside R, so keep cy-R-22 >= 58 and cy+R+22 <= 476:
+  // R <= 187 with cy = 267. Centre x left of the readout divider (x=564).
+  P.cx = 250; P.cy = 267; P.R = 178;
   P.rm = resolveMode();
   if (P.rm == RM_QTH) {
     double v = fabs(qthLat) + 25.0;
@@ -718,11 +715,13 @@ void buildReferenceOrbits() {
 
 // ---------------------------------------------------------------------------
 //  Ground-track arc for the current orbit (for the map view).
-//  The OSCARLOCATOR arc is the sub-satellite track of ONE orbit, drawn from
-//  its equator crossing. For a live display we draw the track spanning roughly
-//  one orbital period centred on the current time, so the bird sits on its arc.
+//  The OSCARLOCATOR arc is the sub-satellite track of exactly ONE orbit (one
+//  revolution). The website samples one period forward from a base time; for a
+//  live display we centre that single-period window on "now" so the satellite
+//  sits on its own arc. Spanning more than one period would make the track loop
+//  back over itself, so the window is exactly one period -- no more.
 // ---------------------------------------------------------------------------
-#define ARC_PTS 121
+#define ARC_PTS 241
 double arcLat[ARC_PTS], arcLon[ARC_PTS];
 int    arcN = 0;
 
@@ -733,10 +732,10 @@ void buildGroundArc() {
   // mean motion (rev/day) from the propagator -> period seconds.
   double periodS = 95.0 * 60.0;          // fallback ~95 min
   if (sat.revpday > 0.1) periodS = 86400.0 / sat.revpday;
-  double half = periodS * 0.6;       // a little over half an orbit each side
+  double half = periodS * 0.5;           // EXACTLY one period total (now +/- 0.5)
   for (int k = 0; k < ARC_PTS; k++) {
     double frac = (double)k / (ARC_PTS - 1);
-    double t = (double)now - half + frac * (2.0 * half);
+    double t = (double)now - half + frac * periodS;   // span = one period
     sat.findsat((unsigned long)t);
     arcLat[arcN] = sat.satLat;
     arcLon[arcN] = wrap180(sat.satLon);
@@ -864,7 +863,6 @@ void drawHeader(const char* title) {
 }
 
 // Footer tab bar with the three screens + (on map) view button.
-struct Btn { int x, y, w, h; const char* label; };
 Btn tabMap   = {  16, SCREEN_H - 56, 150, 44, "Map" };
 Btn tabPass  = { 176, SCREEN_H - 56, 200, 44, "Next passes" };
 Btn tabRef   = { 386, SCREEN_H - 56, 230, 44, "Reference orbits" };
@@ -1124,8 +1122,9 @@ void drawMapScreen() {
   canvas.drawString("equidistant projection", rx, ry); ry += 30;
   canvas.setTextColor(C_BLACK, C_WHITE);
   canvas.setFont(&fonts::FreeSans9pt7b);
-  canvas.drawString("Paul Stoetzer, N8HM", rx, SCREEN_H - 92);
-  canvas.drawString("oscarlocator.n8hm.radio", rx, SCREEN_H - 70);
+  // Credit, kept clear of the tab bar (which starts at SCREEN_H-62).
+  canvas.drawString("Paul Stoetzer, N8HM", rx, SCREEN_H - 108);
+  canvas.drawString("oscarlocator.n8hm.radio", rx, SCREEN_H - 86);
 
   drawTabBar();
 
